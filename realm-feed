@@ -1,14 +1,87 @@
 #!/usr/bin/perl
 
+# realm - REmote Authentication Log Monitor
+#
+# Authors:
+#   Thomas Liske <thomas@fiasko-nw.net>
+#
+# Copyright Holder:
+#   2014 (C) Thomas Liske [http://fiasko-nw.net/~thomas/]
+#
+# License:
+#   This program is free software; you can redistribute it and/or modify
+#   it under the terms of the GNU General Public License as published by
+#   the Free Software Foundation; either version 2 of the License, or
+#   (at your option) any later version.
+#
+
 use warnings;
 use strict;
 
+use DBI;
 use Geo::IP;
+use Getopt::Std;
 use Net::Whois::Raw;
+
+my $VERSION = qq(0.1);
+$Getopt::Std::STANDARD_HELP_VERSION++;
+
+sub HELP_MESSAGE {
+    print <<USG;
+Usage:
+
+  realm-feed [-v] [-c <cfg>] <ip> <username>
+
+    -v		be more verbose
+    -c <cfg>	config filename
+
+USG
+}
+
+sub VERSION_MESSAGE {
+    print <<LIC;
+
+realm $VERSION - REmote Authentication Log Monitor
+
+Authors:
+  Thomas Liske <thomas\@fiasko-nw.net>
+
+Copyright Holder:
+  2014 (C) Thomas Liske [http://fiasko-nw.net/~thomas/]
+
+Upstream:
+  https://github.com/liske/realm
+
+This program is free software; you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation; either version 2 of the License, or
+(at your option) any later version.
+
+LIC
+#/
+}
+
+our %realmconf = (
+    ds => ['dbi:SQLite:dbname=/var/lib/realm/backend', '', ''],
+);
+
+our $opt_c = '/etc/realm/realm.conf';
+our $opt_v;
+unless(getopts('c:v')) {
+    HELP_MESSAGE;
+    exit 1;
+}
+
+die "ERROR: Could not read config file '$opt_c'!\n" unless(-r $opt_c);
+
+# slurp config file
+eval `cat "$opt_c"`;
+die "$@\n" if($@);
 
 $Net::Whois::Raw::OMIT_MSG = 1;
 $Net::Whois::Raw::CHECK_FAIL = 1;
 
+my $dbh = DBI->connect(@{$realmconf{ds}});
 
 use Data::Dumper;
 
