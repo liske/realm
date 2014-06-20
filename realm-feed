@@ -1,0 +1,15 @@
+#!/usr/bin/perl
+
+use warnings;
+use strict;
+
+use Geo::IP;
+use Net::Whois::Raw;
+
+$Net::Whois::Raw::OMIT_MSG = 1;
+$Net::Whois::Raw::CHECK_FAIL = 1;
+
+
+use Data::Dumper;
+
+print Dumper(whois(shift || '212.111.225.17'));
