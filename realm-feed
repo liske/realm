@@ -30,7 +30,7 @@ sub HELP_MESSAGE {
     print <<USG;
 Usage:
 
-  realm-feed [-v] [-c <cfg>] <ip> <username>
+  realm-feed [-v] [-c <cfg>]
 
     -v		be more verbose
     -c <cfg>	config filename
@@ -78,11 +78,35 @@ die "ERROR: Could not read config file '$opt_c'!\n" unless(-r $opt_c);
 eval `cat "$opt_c"`;
 die "$@\n" if($@);
 
+my $dbh = DBI->connect(@{$realmconf{ds}});
+my $gi = Geo::IP->new(GEOIP_INDEX_CACHE | GEOIP_CHECK_CACHE);
+
 $Net::Whois::Raw::OMIT_MSG = 1;
 $Net::Whois::Raw::CHECK_FAIL = 1;
 
-my $dbh = DBI->connect(@{$realmconf{ds}});
+while(<STDIN>) {
+    chomp;
 
-use Data::Dumper;
+    my ($in_ip, $in_user, $in_host, $in_service, $in_misc) = split(/\|/);
+    $in_host ||= 'localhost';
+    $in_service ||= '<unknown>';
+    $in_misc ||= '-';
 
-print Dumper(whois(shift || '212.111.225.17'));
+    my $whois = whois($in_ip);
+    my $asn = -1;
+    my $netname = '<unknown>';
+
+    $asn = $1 if($whois =~ /^origin\S*:\s+(AS\d+)/mi);
+    $netname = $1 if($whois =~ /^netname:\s+(\S+)/mi);
+
+    my %dataset = (
+	host => $in_host,
+	service => $in_service,
+	country => $gi->country_code_by_addr($in_ip),
+	asn => $asn,
+	netname => $netname,
+    );
+
+    use Data::Dumper;
+    print Dumper(\%dataset);
+}
