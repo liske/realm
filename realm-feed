@@ -18,10 +18,18 @@
 use warnings;
 use strict;
 
-use DBI;
+use AnyEvent;
+use AnyEvent::Handle;
+use AnyEvent::Socket;
 use Geo::IP;
 use Getopt::Std;
 use Net::Whois::Raw;
+use Log::Any::Adapter;
+use Log::Dispatch;
+use Log::Dispatch::Screen;
+use Log::Dispatch::Syslog;
+use Proc::Daemon;
+use Proc::PID::File;
 
 my $VERSION = qq(0.1);
 $Getopt::Std::STANDARD_HELP_VERSION++;
@@ -61,13 +69,17 @@ LIC
 #/
 }
 
+
 our %realmconf = (
-    ds => ['dbi:SQLite:dbname=/var/lib/realm/backend', '', ''],
+    listen_port => 1712,
+    listen_addr => '::1',
 );
+our %realms = ();
 
 our $opt_c = '/etc/realm/realm.conf';
 our $opt_v;
-unless(getopts('c:v')) {
+our $opt_f;
+unless(getopts('c:vf')) {
     HELP_MESSAGE;
     exit 1;
 }
@@ -78,11 +90,111 @@ die "ERROR: Could not read config file '$opt_c'!\n" unless(-r $opt_c);
 eval `cat "$opt_c"`;
 die "$@\n" if($@);
 
-my $dbh = DBI->connect(@{$realmconf{ds}});
+
+$0 = 'realmd';
+my $logfmt = sub { my %p = @_; chomp($p{'message'}); return ("[$p{level}] $p{message}\n"); };
+my $logger = Log::Dispatch->new(callbacks => $logfmt);
+$logger->add(
+    Log::Dispatch::Screen->new(
+	name => 'console',
+	min_level => ($opt_f ? ($opt_v ? 'info' : 'notice') : 'warning'),
+    )
+);
+$logger->add(
+    Log::Dispatch::Syslog->new(
+	name => 'syslog',
+	min_level => ($opt_v ? 'info' : 'notice'),
+	ident => 'realmd',
+	logopt => 'pid',
+	facility => 'daemon',
+    )
+) unless($opt_f);
+Log::Any::Adapter->set('Dispatch', dispatcher => $main::logger);
+
+
+sub WARN_handler {
+    my($signal) = @_;
+
+    if(defined $logger) {
+	$main::logger->warning("WARNING: $signal");
+    }
+    else {
+	printf STDERR "WARNING: $signal\n";
+    }
+}
+
+sub DIE_handler {
+    my($signal) = @_;
+
+    if(defined $logger) {
+	$logger->critical("ERROR: $signal");
+    }
+    else {
+	printf STDERR "ERROR: $signal\n";
+    }
+    
+    exit 1;
+}
+
+sub INT_handler {
+    if(defined $logger) {
+	$logger->notice('Got SIGINT, terminating.');
+    }
+    else {
+	printf STDERR "Got SIGINT, terminating.\n";
+    }
+    
+    exit;
+}
+
+$SIG{__WARN__} = 'WARN_handler';
+$SIG{__DIE__}  = 'DIE_handler';
+$SIG{INT} = 'INT_handler';
+$SIG{PIPE} = 'IGNORE';
+$SIG{CHLD} = 'IGNORE';
+
+END {
+    my $m = "terminated (rc=$?)";
+    if(defined $logger) {
+	$logger->notice($m);
+    }
+    else {
+	print STDERR "$m\n";
+    }
+}
+
+
 my $gi = Geo::IP->new(GEOIP_INDEX_CACHE | GEOIP_CHECK_CACHE);
 
 $Net::Whois::Raw::OMIT_MSG = 1;
 $Net::Whois::Raw::CHECK_FAIL = 1;
+
+
+
+my %conns;
+my $sock = tcp_server $realmconf{'listen_addr'}, $realmconf{'listen_port'}, sub {
+    my ($fh, $host, $port) = @_;
+
+    $conns{$fh} = new AnyEvent::Handle(
+	fh => $fh,
+	on_eof => sub {
+	    delete($conns{$fh});
+	    exit;
+	},
+	on_read => sub {
+	    $conns{$fh}->push_read(json => sub {
+		my $dataset = shift;
+		print Dumper($dataset);
+	    });
+	}
+    );
+};
+
+
+$logger->info("enter event loop...");
+AnyEvent->condvar->recv;
+
+__DATA__
 
 while(<STDIN>) {
     chomp;
