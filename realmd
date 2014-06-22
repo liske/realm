@@ -28,6 +28,7 @@ use Log::Dispatch::Screen;
 use Log::Dispatch::Syslog;
 use Proc::Daemon;
 use Proc::PID::File;
+use Tie::Cache;
 
 my $VERSION = qq(0.1);
 $Getopt::Std::STANDARD_HELP_VERSION++;
@@ -163,7 +164,41 @@ END {
     }
 }
 
+# prepare dynamic field cache
+my %caches;
+foreach my $dkey (@realm_dkeys) {
+    next unless(exists($dkey->{cache}));
 
+    foreach my $field (@{ $dkey->{keys} }) {
+	my %_cache = ();
+	tie %_cache, 'Tie::Cache', { MaxBytes => 4*10**6, WriteSync => 0, Debug => 2 };
+	$caches{$dkey->{cache}->{name} . '#' . $field} = \%_cache;
+    }
+}
+
+sub update_tree($$@) {
+    my $dataset = shift;
+    my $tree = shift;
+    my $key = shift;
+    my @keys = @_;
+
+    unless(exists($tree->{$dataset->{$key}})) {
+	$tree->{$dataset->{$key}}->{childs} = { };
+	$tree->{$dataset->{$key}}->{count} = 0;
+    }
+
+    $tree->{$dataset->{$key}}->{count}++;
+
+    if($tree->{$dataset->{$key}}->{count} > 0x80000000) {
+	foreach my $v (keys %$tree) {
+	    $tree->{$v}->{p} = $tree->{$v}->{count} >> 2;
+	}
+    }
+
+    &update_tree($dataset, $tree->{$dataset->{$key}}->{childs}, @keys) if(scalar @keys);
+}
+
+my %instances;
 my %conns;
 my $sock = tcp_server $realmconf{'listen_addr'}, $realmconf{'listen_port'}, sub {
     my ($fh, $host, $port) = @_;
@@ -184,17 +219,48 @@ my $sock = tcp_server $realmconf{'listen_addr'}, $realmconf{'listen_port'}, sub 
 
 		# eval dynamic fields
 		foreach my $dkey (@realm_dkeys) {
-		    &{$dkey->{sub}}($dataset);
+		    my $found = 0;
+		    my $ckey;
+		    if(exists($dkey->{cache})) {
+			my $cinfo = $dkey->{cache};
+			$ckey = &{$cinfo->{key}}($dataset);
+
+			$found++;
+			foreach my $field (@{ $dkey->{keys} }) {
+			    if(exists($caches{$cinfo->{name} . '#' . $field}->{$ckey})) {
+				$dataset->{$field} = $caches{$cinfo->{name} . '#' . $field}->{$ckey};
+			    }
+			    else {
+				$found = 0;
+				last;
+			    }
+			}
+		    }
+
+		    unless($found) {
+			&{$dkey->{sub}}($dataset);
+			
+			if($ckey) {
+			    foreach my $field (@{ $dkey->{keys} }) {
+				$caches{$dkey->{cache}->{name} . '#' . $field}->{$ckey} = $dataset->{$field};
+			    }
+			}
+		    }
 		}
 
 		# apply filters
 		foreach my $key (keys %{ $realms{$dataset->{instance}}->{filters} }) {
-		    print ">>$key\n$dataset->{$key}\n$realms{$dataset->{instance}}->{filters}->{$key}\n";
 		    return unless($dataset->{$key} =~ /$realms{$dataset->{instance}}->{filters}->{$key}/);
 		}
 
+		my $root = join('#', map { $dataset->{$_}; } @{ $realms{$dataset->{instance}}->{keys} });
+		foreach my $tree (keys %{ $realms{$dataset->{instance}}->{trees} }) {
+		    $instances{$dataset->{instance}}->{$tree}->{$root} = {} unless(exists($instances{$dataset->{instance}}->{$tree}->{$root}));
+		    update_tree($dataset, $instances{$dataset->{instance}}->{$tree}->{$root}, @{ $realms{$dataset->{instance}}->{trees}->{$tree}->{keys} });
+		}
+
 		use Data::Dumper;
-		print Dumper($dataset);
+		print Dumper($instances{$dataset->{instance}});
 	    });
 	}
     );
@@ -203,32 +269,3 @@ my $sock = tcp_server $realmconf{'listen_addr'}, $realmconf{'listen_port'}, sub 
 
 $logger->info("enter event loop...");
 AnyEvent->condvar->recv;
-
-__DATA__
-
-while(<STDIN>) {
-    chomp;
-
-    my ($in_ip, $in_user, $in_host, $in_service, $in_misc) = split(/\|/);
-    $in_host ||= 'localhost';
-    $in_service ||= '<unknown>';
-    $in_misc ||= '-';
-
-    my $whois = whois($in_ip);
-    my $asn = -1;
-    my $netname = '<unknown>';
-
-    $asn = $1 if($whois =~ /^origin\S*:\s+(AS\d+)/mi);
-    $netname = $1 if($whois =~ /^netname:\s+(\S+)/mi);
-
-    my %dataset = (
-	host => $in_host,
-	service => $in_service,
-	country => $gi->country_code_by_addr($in_ip),
-	asn => $asn,
-	netname => $netname,
-    );
-
-    use Data::Dumper;
-    print Dumper(\%dataset);
-}
