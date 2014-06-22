@@ -21,9 +21,7 @@ use strict;
 use AnyEvent;
 use AnyEvent::Handle;
 use AnyEvent::Socket;
-use Geo::IP;
 use Getopt::Std;
-use Net::Whois::Raw;
 use Log::Any::Adapter;
 use Log::Dispatch;
 use Log::Dispatch::Screen;
@@ -74,6 +72,8 @@ our %realmconf = (
     listen_port => 1712,
     listen_addr => '::1',
 );
+our %realm_skeys;
+our @realm_dkeys;
 our %realms = ();
 
 our $opt_c = '/etc/realm/realm.conf';
@@ -109,14 +109,14 @@ $logger->add(
 	facility => 'daemon',
     )
 ) unless($opt_f);
-Log::Any::Adapter->set('Dispatch', dispatcher => $main::logger);
+Log::Any::Adapter->set('Dispatch', dispatcher => $logger);
 
 
 sub WARN_handler {
     my($signal) = @_;
 
     if(defined $logger) {
-	$main::logger->warning("WARNING: $signal");
+	$logger->warning("WARNING: $signal");
     }
     else {
 	printf STDERR "WARNING: $signal\n";
@@ -162,13 +162,6 @@ END {
 	print STDERR "$m\n";
     }
 }
-
-
-my $gi = Geo::IP->new(GEOIP_INDEX_CACHE | GEOIP_CHECK_CACHE);
-
-$Net::Whois::Raw::OMIT_MSG = 1;
-$Net::Whois::Raw::CHECK_FAIL = 1;
-
 
 
 my %conns;
