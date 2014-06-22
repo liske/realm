@@ -188,7 +188,8 @@ my $sock = tcp_server $realmconf{'listen_addr'}, $realmconf{'listen_port'}, sub 
 		}
 
 		# apply filters
-		foreach my $key (%{ $realms{$dataset->{instance}}->{filters} }) {
+		foreach my $key (keys %{ $realms{$dataset->{instance}}->{filters} }) {
+		    print ">>$key\n$dataset->{$key}\n$realms{$dataset->{instance}}->{filters}->{$key}\n";
 		    return unless($dataset->{$key} =~ /$realms{$dataset->{instance}}->{filters}->{$key}/);
 		}
 
