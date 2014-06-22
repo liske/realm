@@ -26,8 +26,6 @@ use Log::Any::Adapter;
 use Log::Dispatch;
 use Log::Dispatch::Screen;
 use Log::Dispatch::Syslog;
-use Proc::Daemon;
-use Proc::PID::File;
 
 my $VERSION = qq(0.1);
 $Getopt::Std::STANDARD_HELP_VERSION++;
@@ -36,10 +34,11 @@ sub HELP_MESSAGE {
     print <<USG;
 Usage:
 
-  realm-feed [-v] [-c <cfg>]
+  realm-feed [-v] [-c <cfg>] [-i <inst>]
 
     -v		be more verbose
     -c <cfg>	config filename
+    -i <inst>   instance name
 
 USG
 }
@@ -78,8 +77,8 @@ our %realms = ();
 
 our $opt_c = '/etc/realm/realm.conf';
 our $opt_v;
-our $opt_f;
-unless(getopts('c:vf')) {
+our $opt_i = 'default';
+unless(getopts('c:vi:')) {
     HELP_MESSAGE;
     exit 1;
 }
@@ -91,24 +90,18 @@ eval `cat "$opt_c"`;
 die "$@\n" if($@);
 
 
-$0 = 'realmd';
+$0 = "realm[$opt_i]";
 my $logfmt = sub { my %p = @_; chomp($p{'message'}); return ("[$p{level}] $p{message}\n"); };
 my $logger = Log::Dispatch->new(callbacks => $logfmt);
-$logger->add(
-    Log::Dispatch::Screen->new(
-	name => 'console',
-	min_level => ($opt_f ? ($opt_v ? 'info' : 'notice') : 'warning'),
-    )
-);
 $logger->add(
     Log::Dispatch::Syslog->new(
 	name => 'syslog',
 	min_level => ($opt_v ? 'info' : 'notice'),
-	ident => 'realmd',
+	ident => $0,
 	logopt => 'pid',
 	facility => 'daemon',
     )
-) unless($opt_f);
+);
 Log::Any::Adapter->set('Dispatch', dispatcher => $logger);
 
 
@@ -164,41 +157,60 @@ END {
 }
 
 
-my %conns;
-my $sock = tcp_server $realmconf{'listen_addr'}, $realmconf{'listen_port'}, sub {
-    my ($fh, $host, $port) = @_;
+my $hsock;
+my $fh;
+my $sock = tcp_connect $realmconf{'listen_addr'}, $realmconf{'listen_port'}, sub {
+    $fh = shift;
 
-    $conns{$fh} = new AnyEvent::Handle(
+    die("Unable to connect to $realmconf{listen_addr}:$realmconf{listen_port}: $!\n") unless($fh);
+
+    $hsock = new AnyEvent::Handle(
 	fh => $fh,
 	on_eof => sub {
-	    delete($conns{$fh});
 	    exit;
 	},
-	on_read => sub {
-	    $conns{$fh}->push_read(json => sub {
-		shift;
-		my $dataset = shift;
-
-		# ignore unkown instances
-		return unless(exists($dataset->{instance}) && exists($realms{$dataset->{instance}}));
-
-		# eval dynamic fields
-		foreach my $dkey (@realm_dkeys) {
-		    &{$dkey->{sub}}($dataset);
-		}
-
-		# apply filters
-		foreach my $key (%{ $realms{$dataset->{instance}}->{filters} }) {
-		    return unless($dataset->{$key} =~ /$realms{$dataset->{instance}}->{filters}->{$key}/);
-		}
-
-		use Data::Dumper;
-		print Dumper($dataset);
-	    });
-	}
     );
 };
+my $hstdin;
+$hstdin = new AnyEvent::Handle(
+    fh => \*STDIN,
+    on_eof => sub {
+	close($fh);
+	exit;
+    },
+    on_read => sub {
+	    $hstdin->push_read(line => sub {
+		my $line = shift;
+		$line = shift;
+		chomp($line);
+		my $dataset = { instance => $opt_i };
+		my $errs = 0;
 
+		foreach my $key (keys %realm_skeys) {
+		    if($line =~ /\|$key=([^|]*)\|/) {
+			my $value = $1;
+			if($value =~ /$realm_skeys{$key}/) {
+			    $dataset->{$key} = $value;
+			}
+			else {
+			    $errs++;
+			    $logger->info("Bad value '$value' for key $key on input line!");
+use Data::Dumper;
+			    print Dumper($realm_skeys{$key});
+			    last;
+			}
+		    }
+		    else {
+			$errs++;
+			$logger->info("Missing key $key on input line!");
+			last;
+		    }
+		}
+
+		$hsock->push_write($hsock->json_coder->encode($dataset)) unless($errs);
+	   });
+    }
+);
 
 $logger->info("enter event loop...");
 AnyEvent->condvar->recv;
