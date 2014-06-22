@@ -11,4 +11,5 @@ realm is coded in Perl5 and requires the following perl packages:
 * Log::Dispatch
 * Proc::Daemon
 * Proc::PID::File
+* Regexp::Common
 * Tie::Cache
