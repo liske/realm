@@ -253,7 +253,7 @@ my $sock = tcp_server $realmconf{'listen_addr'}, $realmconf{'listen_port'}, sub 
 		    return unless($dataset->{$key} =~ /$realms{$dataset->{instance}}->{filters}->{$key}/);
 		}
 
-		my $root = join('#', map { $dataset->{$_}; } @{ $realms{$dataset->{instance}}->{keys} });
+		my $root = join('#', map { $dataset->{$_}; } @{ $realms{$dataset->{instance}}->{index} });
 		foreach my $tree (keys %{ $realms{$dataset->{instance}}->{trees} }) {
 		    $instances{$dataset->{instance}}->{$tree}->{$root} = {} unless(exists($instances{$dataset->{instance}}->{$tree}->{$root}));
 		    update_tree($dataset, $instances{$dataset->{instance}}->{$tree}->{$root}, @{ $realms{$dataset->{instance}}->{trees}->{$tree}->{keys} });
