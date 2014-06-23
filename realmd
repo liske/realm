@@ -207,7 +207,6 @@ my $sock = tcp_server $realmconf{'listen_addr'}, $realmconf{'listen_port'}, sub 
 	fh => $fh,
 	on_eof => sub {
 	    delete($conns{$fh});
-	    exit;
 	},
 	on_read => sub {
 	    $conns{$fh}->push_read(json => sub {
