@@ -94,6 +94,12 @@ $0 = "realm[$opt_i]";
 my $logfmt = sub { my %p = @_; chomp($p{'message'}); return ("[$p{level}] $p{message}\n"); };
 my $logger = Log::Dispatch->new(callbacks => $logfmt);
 $logger->add(
+    Log::Dispatch::Screen->new(
+	name => 'console',
+	min_level => ($opt_v ?'info' : 'notice'),
+    )
+) if(-t STDERR);
+$logger->add(
     Log::Dispatch::Syslog->new(
 	name => 'syslog',
 	min_level => ($opt_v ? 'info' : 'notice'),
@@ -195,8 +201,6 @@ $hstdin = new AnyEvent::Handle(
 			else {
 			    $errs++;
 			    $logger->info("Bad value '$value' for key $key on input line!");
-use Data::Dumper;
-			    print Dumper($realm_skeys{$key});
 			    last;
 			}
 		    }
