@@ -172,8 +172,9 @@ my $sock = tcp_connect $realmconf{'listen_addr'}, $realmconf{'listen_port'}, sub
 
     $hsock = new AnyEvent::Handle(
 	fh => $fh,
-	on_eof => sub {
-	    exit;
+	on_error => sub {
+	    my ($hdl, $fatal, $msg) = @_;
+	    die "$msg\n";
 	},
     );
 };
