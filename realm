@@ -214,32 +214,3 @@ use Data::Dumper;
 
 $logger->info("enter event loop...");
 AnyEvent->condvar->recv;
-
-__DATA__
-
-while(<STDIN>) {
-    chomp;
-
-    my ($in_ip, $in_user, $in_host, $in_service, $in_misc) = split(/\|/);
-    $in_host ||= 'localhost';
-    $in_service ||= '<unknown>';
-    $in_misc ||= '-';
-
-    my $whois = whois($in_ip);
-    my $asn = -1;
-    my $netname = '<unknown>';
-
-    $asn = $1 if($whois =~ /^origin\S*:\s+(AS\d+)/mi);
-    $netname = $1 if($whois =~ /^netname:\s+(\S+)/mi);
-
-    my %dataset = (
-	host => $in_host,
-	service => $in_service,
-	country => $gi->country_code_by_addr($in_ip),
-	asn => $asn,
-	netname => $netname,
-    );
-
-    use Data::Dumper;
-    print Dumper(\%dataset);
-}
