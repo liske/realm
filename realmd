@@ -22,6 +22,7 @@ use AnyEvent;
 use AnyEvent::Handle;
 use AnyEvent::Socket;
 use Getopt::Std;
+use JSON::PP;
 use Log::Any::Adapter;
 use Log::Dispatch;
 use Log::Dispatch::Screen;
@@ -72,6 +73,8 @@ LIC
 our %realmconf = (
     listen_port => 1712,
     listen_addr => '::1',
+    last_size => 10,
+    cachedir => q(/var/cache/realm),
 );
 our %realm_skeys;
 our @realm_dkeys;
@@ -162,6 +165,8 @@ END {
     else {
 	print STDERR "$m\n";
     }
+
+    &dump_trees;
 }
 
 # prepare dynamic field cache
@@ -183,8 +188,9 @@ sub update_tree($$@) {
     my @keys = @_;
 
     unless(exists($tree->{$dataset->{$key}})) {
-	$tree->{$dataset->{$key}}->{childs} = { };
+	$tree->{$dataset->{$key}}->{childs} = {};
 	$tree->{$dataset->{$key}}->{count} = 0;
+	$tree->{$dataset->{$key}}->{last} = [] unless(scalar @keys);
     }
 
     $tree->{$dataset->{$key}}->{count}++;
@@ -195,10 +201,41 @@ sub update_tree($$@) {
 	}
     }
 
-    &update_tree($dataset, $tree->{$dataset->{$key}}->{childs}, @keys) if(scalar @keys);
+    if(scalar @keys) {
+	&update_tree($dataset, $tree->{$dataset->{$key}}->{childs}, @keys) 
+    }
+    else {
+	push(@{ $tree->{$dataset->{$key}}->{last} }, $dataset);
+	shift(@{ $tree->{$dataset->{$key}}->{last} }) if(scalar @{ $tree->{$dataset->{$key}}->{last} } > $realmconf{last_size});
+    }
 }
 
 my %instances;
+my $json = JSON::PP->new->ascii->pretty->allow_nonref;
+
+sub dump_trees {
+    mkdir("$realmconf{cachedir}/trees") unless(-d "$realmconf{cachedir}/trees");
+
+    foreach my $instance (keys %instances) {
+	open(my $fh, '>', "$realmconf{cachedir}/trees/$instance.json") || next;
+	print $fh $json->encode($instances{$instance});
+	close($fh);
+    }
+}
+
+foreach my $instance (keys %realms) {
+    my $fn = "$realmconf{cachedir}/trees/$instance.json";
+
+    next unless (-r $fn);
+
+    my $t = `cat "$fn"`;
+    if($t) {
+	$instances{$instance} = $json->decode($t);
+	$logger->info("loaded $fn...");
+    }
+}
+
+my $autodump = AnyEvent->timer(after => 3600, interval => 14400, cb => &dump_trees);
 my %conns;
 my $sock = tcp_server $realmconf{'listen_addr'}, $realmconf{'listen_port'}, sub {
     my ($fh, $host, $port) = @_;
